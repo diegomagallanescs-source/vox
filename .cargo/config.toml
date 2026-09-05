@@ -1,0 +1,29 @@
+# Workspace-level cargo configuration.
+#
+# Build through `scripts\cargo-msvc.cmd` on Windows: it selects a complete MSVC toolset and
+# points bindgen at libclang (LLVM) for whisper-rs-sys.
+#
+# The variables below are read by whisper-rs-sys's build script and forwarded to CMake as
+# `-D` defines when it compiles whisper.cpp/ggml. They exist because of two MSVC pitfalls:
+#
+# 1. ggml's `GGML_NATIVE=ON` (its default) means `-march=native`, which MSVC does not have,
+#    so on MSVC it silently produces a *scalar* build — no AVX at all. We turn it off and
+#    name the instruction sets explicitly. AVX2 + FMA + F16C is the baseline (Intel Haswell
+#    2013 / AMD Excavator 2015 and newer). Older CPUs are out of scope until ggml's runtime
+#    CPU dispatch (`GGML_CPU_ALL_VARIANTS` + `GGML_BACKEND_DL`) is wired in.
+#
+# 2. The `cmake` crate replaces CMake's default Release flags (`/O2 /Ob2 /DNDEBUG`) with the
+#    `cc` crate's flags, which carry no optimisation level. Defining the flag variables
+#    ourselves makes the cmake crate leave them alone.
+#
+# Both mistakes made whisper.cpp ~20x slower than it should be (measured 2026-09-05).
+[env]
+GGML_NATIVE = "OFF"
+GGML_SSE42 = "ON"
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+GGML_BMI2 = "ON"
+CMAKE_C_FLAGS_RELEASE = "/O2 /Ob2 /DNDEBUG /MD /nologo /W0"
+CMAKE_CXX_FLAGS_RELEASE = "/O2 /Ob2 /DNDEBUG /MD /nologo /W0 /EHsc /utf-8"

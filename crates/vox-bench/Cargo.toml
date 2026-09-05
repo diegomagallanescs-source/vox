@@ -1,0 +1,21 @@
+[package]
+name = "vox-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Phase-0 harness: transcription latency and accuracy per model, whole-clip and segmented."
+publish = false
+
+[[bin]]
+name = "vox-bench"
+path = "src/main.rs"
+
+[dependencies]
+vox-core = { path = "../vox-core" }
+vox-engine-whisper = { path = "../vox-engine-whisper" }
+hound.workspace = true
+
+[features]
+cuda = ["vox-engine-whisper/cuda"]
+vulkan = ["vox-engine-whisper/vulkan"]
+openmp = ["vox-engine-whisper/openmp"]

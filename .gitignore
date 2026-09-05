@@ -1,0 +1,8 @@
+/target
+/dist
+/models
+*.log
+*.bin
+*.gguf
+.vscode/
+.idea/

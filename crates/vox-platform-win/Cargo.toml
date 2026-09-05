@@ -1,0 +1,13 @@
+[package]
+name = "vox-platform-win"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows platform layer for Vox: low-level input hooks, WASAPI capture, text injection, tray."
+
+[dependencies]
+vox-core = { path = "../vox-core" }
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+windows.workspace = true

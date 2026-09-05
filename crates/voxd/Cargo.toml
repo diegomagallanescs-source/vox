@@ -1,0 +1,25 @@
+[package]
+name = "voxd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vox daemon: always-on push-to-talk dictation for Windows."
+publish = false
+
+[[bin]]
+name = "voxd"
+path = "src/main.rs"
+
+[dependencies]
+vox-core = { path = "../vox-core" }
+vox-engine-whisper = { path = "../vox-engine-whisper" }
+vox-platform-win = { path = "../vox-platform-win" }
+crossbeam-channel.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+hound.workspace = true
+
+[features]
+cuda = ["vox-engine-whisper/cuda"]
+vulkan = ["vox-engine-whisper/vulkan"]
