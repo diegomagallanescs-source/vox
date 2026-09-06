@@ -428,6 +428,12 @@ impl ChordMatcher {
         self.active
     }
 
+    /// Keys currently observed as held. Used to snapshot state when entering bind mode so
+    /// that releases of keys pressed *before* it started are not mistaken for a binding.
+    pub fn held_keys(&self) -> impl Iterator<Item = Key> + '_ {
+        self.held.iter().copied()
+    }
+
     /// Modifiers currently held, ignoring `except` (so a chord whose main key *is* a modifier
     /// does not count itself).
     pub fn held_modifiers(&self, except: Key) -> Modifiers {
@@ -713,6 +719,18 @@ mod tests {
             m.feed(InputEvent::release(MOUSE4)).event,
             Some(HotkeyEvent::Released)
         );
+    }
+
+    #[test]
+    fn held_keys_reports_what_is_down() {
+        let mut m = ChordMatcher::new(Chord::new(F13));
+        m.feed(InputEvent::press(kb(vk::LCONTROL)));
+        m.feed(InputEvent::press(kb(b'K' as u16)));
+        let mut held: Vec<Key> = m.held_keys().collect();
+        held.sort_by_key(|k| k.name());
+        assert_eq!(held, vec![kb(b'K' as u16), kb(vk::LCONTROL)]);
+        m.feed(InputEvent::release(kb(b'K' as u16)));
+        assert_eq!(m.held_keys().collect::<Vec<_>>(), vec![kb(vk::LCONTROL)]);
     }
 
     #[test]

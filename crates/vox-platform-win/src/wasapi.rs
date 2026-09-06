@@ -17,7 +17,9 @@ use crossbeam_channel::Sender;
 use vox_core::config::DeviceSelection;
 use vox_core::SAMPLE_RATE;
 use windows::core::{w, IUnknown, PCWSTR};
-use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
+use windows::Win32::Devices::FunctionDiscovery::{
+    PKEY_Device_EnumeratorName, PKEY_Device_FriendlyName,
+};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, S_OK, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, eConsole, IAudioCaptureClient, IAudioClient, IMMDevice,
@@ -47,6 +49,10 @@ pub struct DeviceInfo {
     pub name: String,
     pub is_default_console: bool,
     pub is_default_communications: bool,
+    /// A Bluetooth endpoint. Recording from one forces the headset into the hands-free
+    /// profile, which audibly degrades its playback until the stream closes — see
+    /// ARCHITECTURE §5. The UI warns about this.
+    pub is_bluetooth: bool,
 }
 
 /// What the capture thread sends.
@@ -94,23 +100,36 @@ fn device_id(device: &IMMDevice) -> Result<String, PlatformError> {
     }
 }
 
-fn friendly_name(device: &IMMDevice) -> String {
+/// Reads a string property from the endpoint's property store.
+fn string_property(device: &IMMDevice, key: &windows::Win32::Foundation::PROPERTYKEY) -> String {
     unsafe {
         let Ok(store) = device.OpenPropertyStore(STGM_READ) else {
             return String::new();
         };
-        let Ok(mut value) = store.GetValue(&PKEY_Device_FriendlyName) else {
+        let Ok(mut value) = store.GetValue(key) else {
             return String::new();
         };
         let inner = &value.Anonymous.Anonymous;
-        let name = if inner.vt == VT_LPWSTR {
+        let text = if inner.vt == VT_LPWSTR {
             inner.Anonymous.pwszVal.to_string().unwrap_or_default()
         } else {
             String::new()
         };
         let _ = PropVariantClear(&mut value);
-        name
+        text
     }
+}
+
+fn friendly_name(device: &IMMDevice) -> String {
+    string_property(device, &PKEY_Device_FriendlyName)
+}
+
+/// Bluetooth endpoints report `BTHENUM` (classic) or `BTHLEENUM` (LE) as their bus
+/// enumerator; everything else (USB, HDAUDIO, …) is wired.
+fn is_bluetooth(device: &IMMDevice) -> bool {
+    string_property(device, &PKEY_Device_EnumeratorName)
+        .to_ascii_uppercase()
+        .starts_with("BTH")
 }
 
 fn default_id(
@@ -140,6 +159,7 @@ pub fn list_capture_devices() -> Result<Vec<DeviceInfo>, PlatformError> {
             is_default_console: default_console.as_deref() == Some(id.as_str()),
             is_default_communications: default_comms.as_deref() == Some(id.as_str()),
             name: friendly_name(&device),
+            is_bluetooth: is_bluetooth(&device),
             id,
         });
     }

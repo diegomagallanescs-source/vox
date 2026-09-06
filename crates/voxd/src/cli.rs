@@ -43,12 +43,19 @@ pub fn devices() -> anyhow::Result<()> {
         if d.is_default_console {
             tags.push("default");
         }
+        if d.is_bluetooth {
+            tags.push("bluetooth");
+        }
         let tags = if tags.is_empty() {
             String::new()
         } else {
             format!("  [{}]", tags.join(", "))
         };
         println!("{}{}\n    id: {}", d.name, tags, d.id);
+        if d.is_bluetooth {
+            println!("    note: recording from this switches it to call mode, so its playback");
+            println!("          sounds muffled while you dictate (a Bluetooth limitation).");
+        }
     }
     Ok(())
 }

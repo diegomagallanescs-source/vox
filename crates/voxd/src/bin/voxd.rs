@@ -18,8 +18,9 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use vox_core::{Config, SAMPLE_RATE};
 use vox_platform_win::vad_rms;
 use vox_platform_win::{
-    hooks, list_capture_devices, message_box, open_capture, watch_devices, AudioMsg, CaptureStream,
-    DeviceEvent, DeviceInfo, DeviceWatcher, MessageKind, MINIMIZED_FLAG,
+    hooks, list_capture_devices, message_box, message_thread, open_capture, watch_devices,
+    AudioMsg, CaptureOutcome, CaptureStream, DeviceEvent, DeviceInfo, DeviceWatcher, MessageKind,
+    MINIMIZED_FLAG,
 };
 use voxd::daemon::Daemon;
 use voxd::paths;
@@ -147,25 +148,49 @@ fn get_paths() -> Paths {
     }
 }
 
-/// Waits for the next key/mouse press. `Ok(None)` = cancelled (Escape or timeout).
+/// Outcome of a bind-mode session, so the UI can tell "nothing arrived" from "cancelled".
+#[derive(Serialize)]
+struct CaptureResult {
+    chord: Option<String>,
+    /// `bound` · `cancelled` · `timeout`
+    reason: &'static str,
+}
+
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Waits for the user to press the key they want to bind.
 #[tauri::command]
-async fn capture_hotkey() -> Result<Option<String>, String> {
+async fn capture_hotkey() -> Result<CaptureResult, String> {
     let (tx, rx) = unbounded();
+    // The mouse hook is normally only installed when the chord needs it; bind mode needs it
+    // regardless, so a mouse side button can be chosen from a keyboard binding.
+    message_thread::set_capture_mode(true);
     hooks::begin_capture(tx);
-    let result =
-        tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(30)))
-            .await
-            .map_err(|e| e.to_string())?;
+    let result = tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(CAPTURE_TIMEOUT))
+        .await
+        .map_err(|e| e.to_string())?;
     hooks::cancel_capture();
+    message_thread::set_capture_mode(false);
     Ok(match result {
-        Ok(Some(chord)) => Some(chord.to_string()),
-        _ => None,
+        Ok(CaptureOutcome::Bound(chord)) => CaptureResult {
+            chord: Some(chord.to_string()),
+            reason: "bound",
+        },
+        Ok(CaptureOutcome::Cancelled) => CaptureResult {
+            chord: None,
+            reason: "cancelled",
+        },
+        Err(_) => CaptureResult {
+            chord: None,
+            reason: "timeout",
+        },
     })
 }
 
 #[tauri::command]
 fn cancel_hotkey_capture() {
     hooks::cancel_capture();
+    message_thread::set_capture_mode(false);
 }
 
 #[tauri::command]

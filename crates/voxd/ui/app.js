@@ -179,7 +179,16 @@ function deviceLabel(d) {
   const tags = [];
   if (d.is_default_communications) tags.push("headset default");
   if (d.is_default_console) tags.push("default");
+  if (d.is_bluetooth) tags.push("bluetooth");
   return { name: d.name, tags };
+}
+
+// Which device the current selection actually resolves to right now.
+function effectiveDevice() {
+  const dev = store.config.audio.device;
+  if (dev.kind === "specific") return store.devices.find((d) => d.id === dev.id);
+  const flag = dev.kind === "default_communications" ? "is_default_communications" : "is_default_console";
+  return store.devices.find((d) => d[flag]);
 }
 
 function MicCard() {
@@ -191,7 +200,15 @@ function MicCard() {
     { kind: "default_console", title: "Follow Windows' default microphone", desc: "Whatever Sound settings shows as the default input." },
   ];
   const meter = store.meter;
+  const active = effectiveDevice();
   return Card("mic", "Microphone", "Which input Vox opens when you press the hotkey. It is only held open while you talk.",
+    active?.is_bluetooth &&
+      h("div", { class: "alert info" },
+        h("strong", null, "Your music will sound muffled while you dictate."),
+        " Bluetooth headsets can't send high-quality audio and carry a microphone at the same time, so Windows drops ",
+        active.name.replace(/^Headset \(|\)$/g, ""),
+        " into call mode whenever Vox records — a limitation of Bluetooth itself, not something Vox can work around. It sounds normal again a moment after you release the key. To avoid it entirely, choose a wired or USB microphone below and keep the headphones for listening."
+      ),
     h("div", { class: "radio-list" },
       ...options.map((o) =>
         h("div", { class: `radio ${kind === o.kind ? "active" : ""}`, onClick: () => updateConfig((c) => (c.audio.device = { kind: o.kind })) },
@@ -328,7 +345,7 @@ function CaptureOverlay() {
     h("div", { class: "modal" },
       h("div", { class: "ring" }, svg("key")),
       h("h3", null, "Press your new hotkey"),
-      h("p", null, "Any key, a modifier combo like Ctrl+Shift+Space, or a mouse side button. Escape cancels."),
+      h("p", null, "Any key, a combo like Ctrl+Shift+Space, or a mouse side button. A modifier on its own — right Ctrl, say — binds when you let go of it. Escape cancels."),
       h("button", { class: "btn", style: { marginTop: "8px" }, onClick: cancelCapture }, "Cancel")
     )
   );
@@ -371,13 +388,14 @@ async function captureHotkey() {
   store.capturing = true;
   render();
   try {
-    const chord = await invoke("capture_hotkey");
+    const res = await invoke("capture_hotkey");
     store.capturing = false;
-    if (chord) {
-      updateConfig((c) => (c.hotkey.chord = chord));
-      toast(`Bound to ${chord}`);
+    if (res.chord) {
+      updateConfig((c) => (c.hotkey.chord = res.chord));
+      toast(`Bound to ${res.chord}`);
     } else {
       render();
+      if (res.reason === "timeout") toast("No key detected — click Change and try again.", "x", true);
     }
   } catch (e) {
     store.capturing = false;

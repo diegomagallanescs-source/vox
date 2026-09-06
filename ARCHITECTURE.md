@@ -181,7 +181,11 @@ irrelevant on an 8 GB card). Lower tiers lazy-load on first use and unload after
   SRC_DEFAULT_QUALITY`. The OS mixer converts; no resampler dependency.
 * **Do not hold the mic open while idle.** An open capture stream forces AirPods into the
   Bluetooth hands-free (HFP) profile, which degrades *playback* quality for as long as it is
-  held. Open the stream on hotkey press, close on release, with a configurable `keep_warm_ms`
+  held. Classic Bluetooth cannot carry high-quality audio and a microphone at once, so this
+  is unavoidable while a Bluetooth headset is the capture device — the only real fix is to
+  record from a different microphone. Endpoints are flagged `is_bluetooth` (from
+  `PKEY_Device_EnumeratorName` starting with `BTH`) and the UI explains the trade-off rather
+  than leaving the user to wonder why their music changed. Open the stream on hotkey press, close on release, with a configurable `keep_warm_ms`
   grace for rapid-fire dictation. HFP switching can take 200–500 ms and clip the first
   syllable — a short "ready" tick plays when capture actually starts. "Keep mic warm" is an
   opt-in for wired mics.
@@ -347,8 +351,20 @@ device, last transcript, release→text latency, last error, dictation count. Th
 drives the tray tooltip and icon (blue idle / red dot while recording).
 
 **Hotkey binding** runs through the hook layer's bind mode: `capture_hotkey` puts the hooks
-into a state where the next non-modifier press is reported as a `Chord` and swallowed, rather
-than matched. Escape cancels; left/right mouse buttons are ignored so the desktop stays usable.
+into a state where the pressed key is reported as a `Chord` and swallowed, rather than
+matched. Escape cancels; left/right mouse buttons are never bound. Three cases the first
+implementation got wrong, each now covered by a unit test on the pure `capture_step`:
+
+| Case | Behaviour |
+|---|---|
+| A bare modifier (`RCtrl`) — also the start of `Ctrl+Shift+K` | Remembered on press, bound on **release**, forgotten if any other key joins it |
+| Space/Enter still held from activating the "Change…" button | Keys held when bind mode opens are snapshotted; their releases are ignored |
+| PrintScreen, which delivers only a key-**up** to low-level hooks | A non-modifier release with no matching press binds |
+
+Bind mode also asks the hook thread to install the mouse hook (`set_capture_mode`) so a mouse
+side button is bindable even from a keyboard binding, and suspends the hook watchdog, whose
+re-install would otherwise leave a sliver of time with no hook. Capture times out after 60 s
+and the UI distinguishes that from a cancel.
 
 ---
 
@@ -406,6 +422,9 @@ than matched. Escape cancels; left/right mouse buttons are ignored so the deskto
 | 2026-09-05 | Frontend is plain DOM, no npm/bundler | one `app.js` + one `styles.css`, no `node_modules`, no build step in `cargo build`; structured like a React app so it stays readable |
 | 2026-09-05 | Autostart entry passes `--minimized` | launching by hand should show the window; launching at login should not |
 | 2026-09-05 | Hotkey binding reuses the hooks in a "capture" mode | binds anything the matcher can match, including mouse side buttons, with no second input path |
+| 2026-09-05 | Bind mode: bare modifiers bind on release; pre-held keys ignored; keyup-only keys bind on release | the first implementation silently dropped all three, which read as "it sometimes doesn't hear my key" |
+| 2026-09-05 | Hook watchdog interval 60 s → 5 min, skipped during binding | each re-install leaves a moment with no hook; in practice a hook only dies if its callback stalls, which ours cannot |
+| 2026-09-05 | Surface `is_bluetooth` and explain the muffling in the UI | the profile switch is unavoidable; leaving it unexplained makes the app look broken |
 
 ## 15. Toolchain (dev machine status, 2026-09-05)
 

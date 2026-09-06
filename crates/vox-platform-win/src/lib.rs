@@ -22,6 +22,7 @@ pub mod wasapi;
 
 pub use autostart::{is_autostart_enabled, set_autostart, MINIMIZED_FLAG};
 pub use device_watch::{watch_devices, DeviceEvent, DeviceWatcher};
+pub use hooks::CaptureOutcome;
 pub use inject::WinTextSink;
 pub use message_thread::MessageThreadHandle;
 pub use misc::{

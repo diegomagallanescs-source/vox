@@ -8,6 +8,7 @@
 //! add or remove it; that has to happen here, on the hook thread.
 
 use std::cell::RefCell;
+use std::sync::OnceLock;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::Sender;
@@ -26,9 +27,12 @@ use crate::PlatformError;
 
 const WM_REBIND: u32 = WM_APP + 3;
 const WM_QUIT_THREAD: u32 = WM_APP + 4;
+const WM_CAPTURE_MODE: u32 = WM_APP + 5;
 const TIMER_REHOOK: usize = 1;
-/// Hooks are re-installed this often as insurance against silent removal.
-const REHOOK_INTERVAL_MS: u32 = 60_000;
+/// Hooks are re-installed this often as insurance against silent removal. Re-installing has
+/// a cost — a sliver of time with no hook — so this is deliberately infrequent and is skipped
+/// while the user is binding a key.
+const REHOOK_INTERVAL_MS: u32 = 5 * 60_000;
 
 pub struct Options {
     pub chord: Chord,
@@ -37,11 +41,51 @@ pub struct Options {
 
 struct ThreadState {
     hooks: Option<Hooks>,
-    mouse: bool,
+    /// The bound chord uses a mouse button.
+    chord_needs_mouse: bool,
+    /// Bind mode is open, so any mouse button must be observable.
+    capture_needs_mouse: bool,
+}
+
+impl ThreadState {
+    fn want_mouse(&self) -> bool {
+        self.chord_needs_mouse || self.capture_needs_mouse
+    }
+
+    /// Install or drop the mouse hook to match what is currently needed.
+    fn sync_hooks(&mut self) {
+        let want = self.want_mouse();
+        if let Some(h) = self.hooks.as_mut() {
+            if h.has_mouse() != want {
+                if let Err(e) = h.reinstall(want) {
+                    tracing::error!("adjusting hooks: {e}");
+                }
+            }
+        }
+    }
 }
 
 thread_local! {
     static STATE: RefCell<Option<ThreadState>> = const { RefCell::new(None) };
+}
+
+/// Set once the hook thread's window exists, so other threads can post to it.
+static HOOK_WINDOW: OnceLock<SendHwnd> = OnceLock::new();
+
+/// Tell the hook thread that bind mode is opening or closing. While it is open the mouse
+/// hook is installed even if the current chord is a keyboard key, so mouse side buttons can
+/// be bound; the hook watchdog also stands down.
+pub fn set_capture_mode(on: bool) {
+    if let Some(hwnd) = HOOK_WINDOW.get() {
+        unsafe {
+            let _ = PostMessageW(
+                Some(hwnd.0),
+                WM_CAPTURE_MODE,
+                WPARAM(usize::from(on)),
+                LPARAM(0),
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -171,9 +215,11 @@ fn create_window_and_hooks(chord: Chord) -> Result<HWND, PlatformError> {
         STATE.with(|s| {
             *s.borrow_mut() = Some(ThreadState {
                 hooks: Some(hooks),
-                mouse,
+                chord_needs_mouse: mouse,
+                capture_needs_mouse: false,
             })
         });
+        let _ = HOOK_WINDOW.set(SendHwnd(hwnd));
         SetTimer(Some(hwnd), TIMER_REHOOK, REHOOK_INTERVAL_MS, None);
         Ok(hwnd)
     }
@@ -185,31 +231,37 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // SAFETY: posted by MessageThreadHandle::rebind with a Box<Chord>.
             let chord = unsafe { *Box::from_raw(lparam.0 as *mut Chord) };
             hooks::rebind(chord);
-            let want_mouse = hooks::chord_uses_mouse(&chord);
             STATE.with(|s| {
                 if let Some(st) = s.borrow_mut().as_mut() {
-                    if st.mouse != want_mouse {
-                        st.mouse = want_mouse;
-                        if let Some(h) = st.hooks.as_mut() {
-                            if let Err(e) = h.reinstall(want_mouse) {
-                                tracing::error!("re-installing hooks after rebind: {e}");
-                            }
-                        }
-                    }
+                    st.chord_needs_mouse = hooks::chord_uses_mouse(&chord);
+                    st.sync_hooks();
+                }
+            });
+            LRESULT(0)
+        }
+        WM_CAPTURE_MODE => {
+            STATE.with(|s| {
+                if let Some(st) = s.borrow_mut().as_mut() {
+                    st.capture_needs_mouse = wparam.0 != 0;
+                    st.sync_hooks();
                 }
             });
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == TIMER_REHOOK => {
-            STATE.with(|s| {
-                if let Some(st) = s.borrow_mut().as_mut() {
-                    if let Some(h) = st.hooks.as_mut() {
-                        if let Err(e) = h.reinstall(st.mouse) {
-                            tracing::error!("hook watchdog re-install failed: {e}");
+            // Re-installing briefly leaves no hook in place, so never do it mid-binding.
+            if !hooks::is_capturing() {
+                STATE.with(|s| {
+                    if let Some(st) = s.borrow_mut().as_mut() {
+                        let want = st.want_mouse();
+                        if let Some(h) = st.hooks.as_mut() {
+                            if let Err(e) = h.reinstall(want) {
+                                tracing::error!("hook watchdog re-install failed: {e}");
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
             LRESULT(0)
         }
         WM_QUIT_THREAD => {
