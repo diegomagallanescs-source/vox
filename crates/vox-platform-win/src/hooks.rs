@@ -20,6 +20,10 @@
 //!   "Change…" button — must not bind when they are released. Their releases are ignored.
 //! * A few keys (PrintScreen most notably) deliver only a key-*up* to low-level hooks. Any
 //!   non-modifier release with no matching press therefore binds too.
+//! * Bind mode swallows **everything it binds, modifiers included**, and remembers each
+//!   swallowed press so the matching release is swallowed as well. Letting a Win or Alt press
+//!   reach Windows and then eating the key after it leaves the system holding a lone modifier
+//!   — which opens the Start menu or a menu bar instead of binding anything.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
@@ -46,10 +50,22 @@ pub enum CaptureOutcome {
 
 struct Capture {
     tx: Sender<CaptureOutcome>,
-    /// Keys held when bind mode began; their releases mean nothing.
+    /// Keys held when bind mode began; their releases mean nothing and must reach the system.
     ignore_release: HashSet<Key>,
     /// A modifier pressed with nothing else since — binds if released alone.
     lone_modifier: Option<Key>,
+    /// Presses we swallowed. Their releases must be swallowed too, or the system sees a
+    /// key-up with no key-down — which is how a bare Win-up opens the Start menu.
+    swallowed: HashSet<Key>,
+    /// An outcome has been sent; we are only draining the releases of `swallowed` now.
+    finished: bool,
+}
+
+impl Capture {
+    /// Bind mode is over once the outcome is out and nothing we swallowed is still held.
+    fn is_done(&self) -> bool {
+        self.finished && self.swallowed.is_empty()
+    }
 }
 
 struct Shared {
@@ -105,6 +121,8 @@ pub fn begin_capture(tx: Sender<CaptureOutcome>) {
                 tx,
                 ignore_release: held,
                 lone_modifier: None,
+                swallowed: HashSet::new(),
+                finished: false,
             });
         }
     }
@@ -140,13 +158,15 @@ fn dispatch(key: Key, pressed: bool) -> bool {
     };
 
     if let Ok(mut capture) = s.capture.lock() {
-        if capture.is_some() {
+        if let Some(cap) = capture.as_mut() {
             // Keep the held-key bookkeeping current, but never emit hotkey events while binding.
             let _ = matcher.feed(InputEvent { key, pressed });
-            let (outcome, suppress) =
-                capture_step(capture.as_mut().unwrap(), &matcher, key, pressed);
+            let (outcome, suppress) = capture_step(cap, &matcher, key, pressed);
             if let Some(outcome) = outcome {
-                let _ = capture.as_ref().unwrap().tx.try_send(outcome);
+                let _ = cap.tx.try_send(outcome);
+                cap.finished = true;
+            }
+            if cap.is_done() {
                 *capture = None;
             }
             return suppress;
@@ -160,49 +180,62 @@ fn dispatch(key: Key, pressed: bool) -> bool {
     result.suppress
 }
 
-/// One input event in bind mode. Returns the outcome (if the session is finished) and
-/// whether to swallow the event. Pure, so the awkward cases are unit-testable.
+/// One input event in bind mode. Returns the outcome (if one is now decided) and whether to
+/// swallow the event. Pure, so the awkward cases are unit-testable.
+///
+/// Everything bindable is swallowed, **modifiers included**. Letting a Win press through and
+/// then swallowing the key after it leaves Windows holding a lone Win — which opens the Start
+/// menu. Alt does the same to menu bars. So each swallowed press is remembered and its
+/// release swallowed too, keeping the system's view of the keyboard consistent.
 fn capture_step(
     cap: &mut Capture,
     matcher: &ChordMatcher,
     key: Key,
     pressed: bool,
 ) -> (Option<CaptureOutcome>, bool) {
+    // The mouse must keep working so the user can click Cancel.
     let unbindable = matches!(key, Key::Mouse(MouseButton::Left | MouseButton::Right));
 
-    if pressed {
-        if key == Key::Keyboard(vk::ESCAPE) {
-            return (Some(CaptureOutcome::Cancelled), true);
+    if !pressed {
+        // A release always has to mirror what we did with its press.
+        let was_swallowed = cap.swallowed.remove(&key);
+        if cap.finished {
+            return (None, was_swallowed);
         }
-        if key.as_modifier().is_some() {
-            // First thing held? Remember it; it binds on release if nothing else joins.
-            cap.lone_modifier = if cap.lone_modifier.is_none() && cap.ignore_release.is_empty() {
-                Some(key)
-            } else {
-                None
-            };
+        if cap.ignore_release.remove(&key) {
             return (None, false);
         }
-        cap.lone_modifier = None;
-        if unbindable {
-            return (None, false);
+        if cap.lone_modifier == Some(key) {
+            return (Some(CaptureOutcome::Bound(Chord::new(key))), was_swallowed);
         }
-        let chord = Chord::with_modifiers(key, matcher.held_modifiers(key));
-        return (Some(CaptureOutcome::Bound(chord)), true);
+        if key.as_modifier().is_none() && !unbindable {
+            // A press we never saw (PrintScreen and friends).
+            return (Some(CaptureOutcome::Bound(Chord::new(key))), true);
+        }
+        return (None, was_swallowed);
     }
 
-    // Release.
-    if cap.ignore_release.remove(&key) {
+    if cap.finished || unbindable {
         return (None, false);
     }
-    if cap.lone_modifier == Some(key) {
-        return (Some(CaptureOutcome::Bound(Chord::new(key))), true);
+    if key == Key::Keyboard(vk::ESCAPE) {
+        cap.swallowed.insert(key);
+        return (Some(CaptureOutcome::Cancelled), true);
     }
-    if key.as_modifier().is_none() && !unbindable {
-        // A press we never saw (PrintScreen and friends).
-        return (Some(CaptureOutcome::Bound(Chord::new(key))), true);
+    if key.as_modifier().is_some() {
+        // First thing held? Remember it; it binds on release if nothing else joins.
+        cap.lone_modifier = if cap.lone_modifier.is_none() && cap.ignore_release.is_empty() {
+            Some(key)
+        } else {
+            None
+        };
+        cap.swallowed.insert(key);
+        return (None, true);
     }
-    (None, false)
+    cap.lone_modifier = None;
+    cap.swallowed.insert(key);
+    let chord = Chord::with_modifiers(key, matcher.held_modifiers(key));
+    (Some(CaptureOutcome::Bound(chord)), true)
 }
 
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -355,25 +388,33 @@ mod tests {
                 tx,
                 ignore_release: held.iter().copied().collect(),
                 lone_modifier: None,
+                swallowed: HashSet::new(),
+                finished: false,
             },
             matcher,
             _rx,
         }
     }
 
-    /// Feed one event to both the matcher and the capture step.
+    /// Feed one event to both the matcher and the capture step, mirroring what `dispatch`
+    /// does with the outcome.
     fn feed(f: &mut Fix, key: Key, pressed: bool) -> (Option<CaptureOutcome>, bool) {
         f.matcher.feed(InputEvent { key, pressed });
-        capture_step(&mut f.cap, &f.matcher, key, pressed)
+        let out = capture_step(&mut f.cap, &f.matcher, key, pressed);
+        if out.0.is_some() {
+            f.cap.finished = true;
+        }
+        out
+    }
+
+    fn bound(chord: &str) -> Option<CaptureOutcome> {
+        Some(CaptureOutcome::Bound(chord.parse().unwrap()))
     }
 
     #[test]
     fn plain_key_binds_on_press_and_is_swallowed() {
         let mut f = fixture(&[]);
-        assert_eq!(
-            feed(&mut f, F13, true),
-            (Some(CaptureOutcome::Bound(Chord::new(F13))), true)
-        );
+        assert_eq!(feed(&mut f, F13, true), (bound("F13"), true));
     }
 
     #[test]
@@ -390,16 +431,41 @@ mod tests {
         let mut f = fixture(&[]);
         assert_eq!(
             feed(&mut f, Key::Keyboard(vk::LCONTROL), true),
-            (None, false)
+            (None, true)
         );
-        assert_eq!(feed(&mut f, Key::Keyboard(vk::LSHIFT), true), (None, false));
-        let (outcome, suppress) = feed(&mut f, K, true);
-        assert!(suppress);
-        let chord = match outcome {
-            Some(CaptureOutcome::Bound(c)) => c,
-            other => panic!("expected a binding, got {other:?}"),
-        };
-        assert_eq!(chord.to_string(), "Ctrl+Shift+K");
+        assert_eq!(feed(&mut f, Key::Keyboard(vk::LSHIFT), true), (None, true));
+        assert_eq!(feed(&mut f, K, true), (bound("Ctrl+Shift+K"), true));
+    }
+
+    /// The bug behind "it just opens other things": swallowing the key but letting the
+    /// modifier through leaves Windows holding a lone Win (Start menu) or Alt (menu bar).
+    #[test]
+    fn modifier_presses_and_releases_are_swallowed_whole() {
+        for modifier in [vk::LWIN, vk::LMENU, vk::LCONTROL] {
+            let m = Key::Keyboard(modifier);
+            let mut f = fixture(&[]);
+            assert_eq!(feed(&mut f, m, true), (None, true), "press of {}", m.name());
+            let (outcome, suppress) = feed(&mut f, K, true);
+            assert!(outcome.is_some() && suppress);
+            // Both keys are still physically held; both releases must be swallowed, and the
+            // session stays open until the last of them arrives.
+            assert_eq!(feed(&mut f, K, false), (None, true), "release of K");
+            assert!(!f.cap.is_done(), "{} is still down", m.name());
+            assert_eq!(
+                feed(&mut f, m, false),
+                (None, true),
+                "release of {}",
+                m.name()
+            );
+            assert!(f.cap.is_done(), "ends once nothing swallowed is still held");
+        }
+    }
+
+    #[test]
+    fn win_combo_binds() {
+        let mut f = fixture(&[]);
+        feed(&mut f, Key::Keyboard(vk::LWIN), true);
+        assert_eq!(feed(&mut f, K, true), (bound("Win+K"), true));
     }
 
     #[test]
@@ -407,31 +473,23 @@ mod tests {
         let mut f = fixture(&[]);
         assert_eq!(
             feed(&mut f, Key::Keyboard(vk::RCONTROL), true),
-            (None, false)
+            (None, true)
         );
         assert_eq!(
             feed(&mut f, Key::Keyboard(vk::RCONTROL), false),
-            (
-                Some(CaptureOutcome::Bound(Chord::new(Key::Keyboard(
-                    vk::RCONTROL
-                )))),
-                true
-            )
+            (bound("RCtrl"), true)
         );
     }
 
     #[test]
-    fn two_modifiers_alone_bind_nothing() {
+    fn two_modifiers_alone_bind_nothing_and_leak_nothing() {
         let mut f = fixture(&[]);
         feed(&mut f, Key::Keyboard(vk::LCONTROL), true);
         feed(&mut f, Key::Keyboard(vk::LSHIFT), true);
-        assert_eq!(
-            feed(&mut f, Key::Keyboard(vk::LSHIFT), false),
-            (None, false)
-        );
+        assert_eq!(feed(&mut f, Key::Keyboard(vk::LSHIFT), false), (None, true));
         assert_eq!(
             feed(&mut f, Key::Keyboard(vk::LCONTROL), false),
-            (None, false)
+            (None, true)
         );
     }
 
@@ -439,11 +497,23 @@ mod tests {
     fn modifier_used_in_a_combo_does_not_bind_on_its_own_release() {
         let mut f = fixture(&[]);
         feed(&mut f, Key::Keyboard(vk::LCONTROL), true);
-        feed(&mut f, K, true); // binds; in the real dispatcher the session ends here
+        feed(&mut f, K, true); // binds
         assert_eq!(
             feed(&mut f, Key::Keyboard(vk::LCONTROL), false),
-            (None, false)
+            (None, true)
         );
+    }
+
+    #[test]
+    fn escape_release_is_swallowed_too() {
+        let esc = Key::Keyboard(vk::ESCAPE);
+        let mut f = fixture(&[]);
+        assert_eq!(
+            feed(&mut f, esc, true),
+            (Some(CaptureOutcome::Cancelled), true)
+        );
+        assert_eq!(feed(&mut f, esc, false), (None, true));
+        assert!(f.cap.is_done());
     }
 
     #[test]

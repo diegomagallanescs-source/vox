@@ -139,15 +139,38 @@ function ToggleRow(title, desc, on, onChange) {
   );
 }
 
+// Keys Windows leaves alone, best first. `why` is shown next to the suggestion.
+const SUGGESTED_HOTKEYS = [
+  { chord: "RCtrl", label: "Right Ctrl", why: "Windows never uses it on its own" },
+  { chord: "CapsLock", label: "Caps Lock", why: "big target; Vox suppresses the toggle" },
+  { chord: "ScrollLock", label: "Scroll Lock", why: "does nothing on a modern PC" },
+  { chord: "Pause", label: "Pause / Break", why: "does nothing on a modern PC" },
+  { chord: "Mouse4", label: "Mouse 4", why: "your mouse's side button" },
+  { chord: "Ctrl+Shift+Space", label: "Ctrl+Shift+Space", why: "free in Windows" },
+];
+
 function HotkeyCard() {
   const hk = store.config.hotkey;
-  return Card("key", "Hotkey", "Hold (or tap) to dictate. Map a mouse button in Razer Synapse to a key like F13 and bind it here.",
+  const taken = SUGGESTED_HOTKEYS.filter((s) => s.chord !== hk.chord);
+  return Card("key", "Hotkey", "Hold (or tap) to dictate. Pick something Windows doesn't already use.",
     h("div", { class: "row between wrap" },
       h("div", { class: "row" },
         h("span", { class: "kbd" }, hk.chord),
         h("span", { class: "hint" }, "current binding")
       ),
       h("button", { class: "btn primary", onClick: captureHotkey }, "Change…")
+    ),
+    h("div", { class: "col" },
+      h("div", { class: "label" }, "SUGGESTIONS — CLICK TO USE"),
+      h("div", { class: "row wrap", style: { gap: "6px" } },
+        ...taken.map((s) =>
+          h("button", {
+            class: "btn sm", title: s.why,
+            onClick: () => { updateConfig((c) => (c.hotkey.chord = s.chord)); toast(`Bound to ${s.label}`); },
+          }, s.label)
+        )
+      ),
+      h("div", { class: "hint" }, "Avoid Windows-key combos — Windows claims most of them. Ctrl+Alt+Del and Win+L can't be intercepted by any app.")
     ),
     h("div", { class: "divider" }),
     h("div", { class: "row between wrap" },
@@ -345,7 +368,7 @@ function CaptureOverlay() {
     h("div", { class: "modal" },
       h("div", { class: "ring" }, svg("key")),
       h("h3", null, "Press your new hotkey"),
-      h("p", null, "Any key, a combo like Ctrl+Shift+Space, or a mouse side button. A modifier on its own — right Ctrl, say — binds when you let go of it. Escape cancels."),
+      h("p", null, "Any key, a combo like Ctrl+Shift+Space, or a mouse side button. A modifier on its own — right Ctrl, say — binds when you let go of it. Nothing you press reaches Windows while this is open. Escape cancels."),
       h("button", { class: "btn", style: { marginTop: "8px" }, onClick: cancelCapture }, "Cancel")
     )
   );

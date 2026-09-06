@@ -43,6 +43,23 @@ The settings window opens and a tray icon appears. Set the hotkey (click **Chang
 the key or mouse side button you want), pick a microphone, then hold the key, talk, and
 release — the text lands in whatever had focus.
 
+### Choosing a hotkey
+
+Windows already owns most obvious combinations, so the settings window offers keys it leaves
+alone — one click each:
+
+| Key | Why it's safe |
+|---|---|
+| **Right Ctrl** | Windows never uses it on its own |
+| **Caps Lock** | a big, easy target; Vox swallows the press so caps never toggles |
+| **Scroll Lock**, **Pause/Break** | do nothing at all on a modern PC |
+| **Mouse 4 / 5** | the side buttons, untouched by Windows |
+| **Ctrl+Shift+Space** | free in Windows (check your editor) |
+| **F13–F24** | no physical key exists; remap a Razer button to one in Synapse |
+
+Avoid **Windows-key** combos — Windows claims most of them. `Ctrl+Alt+Del` and `Win+L` are
+handled by the OS below any application and cannot be bound by any program.
+
 Closing the window leaves Vox listening in the tray; click the tray icon to bring it back,
 right-click for Quit. Started at login it stays in the tray without opening the window.
 

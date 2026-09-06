@@ -360,6 +360,7 @@ implementation got wrong, each now covered by a unit test on the pure `capture_s
 | A bare modifier (`RCtrl`) — also the start of `Ctrl+Shift+K` | Remembered on press, bound on **release**, forgotten if any other key joins it |
 | Space/Enter still held from activating the "Change…" button | Keys held when bind mode opens are snapshotted; their releases are ignored |
 | PrintScreen, which delivers only a key-**up** to low-level hooks | A non-modifier release with no matching press binds |
+| Modifiers reaching Windows while binding | **Everything bindable is swallowed, modifiers included.** Passing a Win press through and then eating the key left Windows holding a lone Win — opening the Start menu instead of binding. Each swallowed press is remembered so its release is swallowed too, and the session stays open until the last of them is released. |
 
 Bind mode also asks the hook thread to install the mouse hook (`set_capture_mode`) so a mouse
 side button is bindable even from a keyboard binding, and suspends the hook watchdog, whose
@@ -425,6 +426,8 @@ and the UI distinguishes that from a cancel.
 | 2026-09-05 | Bind mode: bare modifiers bind on release; pre-held keys ignored; keyup-only keys bind on release | the first implementation silently dropped all three, which read as "it sometimes doesn't hear my key" |
 | 2026-09-05 | Hook watchdog interval 60 s → 5 min, skipped during binding | each re-install leaves a moment with no hook; in practice a hook only dies if its callback stalls, which ours cannot |
 | 2026-09-05 | Surface `is_bluetooth` and explain the muffling in the UI | the profile switch is unavoidable; leaving it unexplained makes the app look broken |
+| 2026-09-05 | Bind mode swallows modifier presses **and** their releases | letting them through meant pressing Win opened the Start menu and Alt lit up menu bars instead of binding |
+| 2026-09-05 | UI suggests known-free keys (RCtrl, CapsLock, ScrollLock, Pause, Mouse 4, Ctrl+Shift+Space) | "which keys are safe?" is the first question binding raises, and Windows claims most obvious combos |
 
 ## 15. Toolchain (dev machine status, 2026-09-05)
 
