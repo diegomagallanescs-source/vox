@@ -79,6 +79,31 @@ pub fn model_search_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Model names available on disk (`ggml-<name>.bin` in any search dir), sorted, de-duplicated.
+pub fn list_models() -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = Vec::new();
+    for dir in model_search_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if path.extension().is_some_and(|e| e == "bin") {
+                if let Some(name) = stem.strip_prefix("ggml-") {
+                    if !out.iter().any(|(n, _)| n == name) {
+                        out.push((name.to_string(), path.clone()));
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// `model` is either a name like `base.en-q5_1` or an explicit path to a `.bin`.
 pub fn resolve_model(model: &str) -> anyhow::Result<PathBuf> {
     let as_path = Path::new(model);

@@ -19,28 +19,40 @@ Must also run acceptably on weaker machines, including CPU-only laptops.
 
 ---
 
-## 1. Process model — two processes
+## 1. Process model — one process, window on demand
 
 "Listens while the app is closed" on Windows means the *listening* must live in something
 that is not the window you close. A Windows Service cannot do it (services run in session 0
-and cannot see the desktop's keyboard or type into it). The correct shape:
+and cannot see the desktop's keyboard or type into it).
+
+The original design used two processes (headless daemon + separate settings exe over a named
+pipe). **Phase 2 replaced that with a single Tauri process**, because Tauri creates the
+webview when the window opens and destroys it when the window closes — the same "UI costs
+nothing while closed" property, without a second binary or an IPC protocol to maintain.
 
 ```
-┌──────────────────────────────────┐          ┌────────────────────────────┐
-│ voxd.exe  — always running       │  named   │ vox-ui.exe — on demand     │
-│ headless · tray icon · no window │◄──pipe──►│ settings window only       │
-│ starts at login (HKCU\Run)       │          │ exits when you close it    │
-└──────────────────────────────────┘          └────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ voxd.exe                                                     │
+│                                                              │
+│  main thread ── Tauri event loop: tray icon, settings window │
+│                 (webview exists only while the window is up) │
+│  vox-hooks    ── WH_KEYBOARD_LL / WH_MOUSE_LL + message loop  │
+│  vox-coordinator ── session state machine, the real work      │
+│  vox-inference   ── whisper.cpp, one model, jobs in order     │
+│  vox-capture     ── WASAPI, only while recording              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-* **`voxd`** owns everything real: input hooks, microphone, model, text injection, config.
-  Idle target: **< 15 MB private RAM, 0 % CPU**. It is purely event-driven — no polling.
-* **`vox-ui`** is a thin client. It connects to the daemon over a named pipe, renders state,
-  sends config changes, and exits. Closing it costs nothing because it holds no state.
-  The tray menu launches it; it launches the daemon if the daemon isn't running.
-* Single instance of each is enforced with a named mutex.
-* The daemon is the **single source of truth** for configuration. The UI never writes the
-  config file directly.
+* The **daemon threads** are the product; the window is a view onto them. Closing it leaves
+  dictation running. Quit lives in the tray menu (and the window footer).
+* Idle target: **< 20 MB private RAM, 0 % CPU** with the window closed (plus the model if
+  `preload` is on). Purely event-driven — no polling.
+* A named mutex enforces a single instance; a second launch shows a message box pointing at
+  the tray.
+* The **coordinator owns the config**. The UI sends whole `Config` values; the coordinator
+  validates, applies, and writes `config.toml`. The UI never writes it directly.
+* Launched by hand → the window opens. Launched at login → the autostart entry passes
+  `--minimized`, so it stays in the tray.
 
 ---
 
@@ -56,10 +68,13 @@ and cannot see the desktop's keyboard or type into it). The correct shape:
 | Python | 150–300 MB | low | fails the efficiency priority outright |
 
 * **Win32 access:** the `windows` crate, used directly (WASAPI, low-level hooks, `SendInput`,
-  clipboard, named pipes, registry, `Shell_NotifyIcon`). One dependency for the whole platform
-  layer, full control, no abstraction gaps (e.g. `cpal` cannot deliver device-change events).
-* **Settings UI:** `egui` (`eframe`). Pure Rust, small, no WebView2 dependency, repaints only on
-  input. Tauri would be prettier at the cost of a large framework for a window opened rarely.
+  clipboard, registry, device notifications). One dependency for the whole platform layer,
+  full control, no abstraction gaps (e.g. `cpal` cannot deliver device-change events).
+* **Settings UI:** **Tauri 2** (WebView2 + HTML/CSS/JS). `egui` was the original choice for
+  its small size, but it cannot produce the intended look; WebView2 ships with Windows 11, so
+  the runtime is already present and the binary only grows by ~4 MB. The frontend is plain
+  DOM — no npm, no bundler, no build step — organised like a React app (a store, component
+  functions returning elements, one `render()`); see §16.
 * **Speech engine:** `whisper.cpp` via `whisper-rs` (see §3).
 * **Threading:** plain `std::thread` + `crossbeam-channel`. No async runtime — there are five
   long-lived threads and the latency-critical path must never sit behind an executor.
@@ -257,19 +272,20 @@ crates/
                       chord parse/match, session state machine, segmenter, text joiner,
                       injection strategy, config schema.        ← nearly all unit tests live here
   vox-engine-whisper/ Engine impl over whisper-rs. features: cuda, vulkan
-  vox-platform-win/   WASAPI + notifications, LL hooks, SendInput/clipboard, tray,
-                      autostart (HKCU\Run), single-instance mutex, sounds
-  vox-ipc/            versioned protocol (serde, length-prefixed JSON) + named-pipe client/server
-  vox-testkit/        fakes: WavAudioSource, ScriptedHotkeys, RecordingTextSink, FakeEngine
-  voxd/               lib + two bins: `voxd.exe` (windowed daemon, tray only) and `vox.exe`
-                      (console CLI: info / devices / mic-test / transcribe)
-  vox-ui/      (bin)  egui settings; depends only on vox-ipc + vox-core types
+  vox-platform-win/   WASAPI + device notifications, LL hooks (incl. bind mode),
+                      SendInput/clipboard, autostart (HKCU\Run), single-instance mutex, sounds
+  vox-bench/   (bin)  latency/WER harness
+  voxd/               lib + two bins:
+                        voxd.exe — Tauri app (tray, settings window) + daemon threads
+                        vox.exe  — console CLI: info / devices / mic-test / transcribe
+                      ui/ — the frontend (index.html, styles.css, app.js); no build step
 ```
 
 ```
-vox-ui ──► vox-ipc ◄── voxd ──► vox-core
-                         ├────► vox-engine-whisper ──► vox-core, whisper-rs
-                         └────► vox-platform-win  ──► vox-core, windows
+voxd ──► vox-core
+  ├────► vox-engine-whisper ──► vox-core, whisper-rs
+  ├────► vox-platform-win   ──► vox-core, windows
+  └────► tauri
 ```
 
 If `whisper-rs` lags whisper.cpp on a feature we need (e.g. the VAD API), a thin `bindgen`
@@ -314,15 +330,25 @@ sounds = true
 autostart = true
 ```
 
-## 11. IPC protocol
+## 11. UI ↔ daemon interface
 
-Length-prefixed JSON frames over `\\.\pipe\voxd`. Version handshake first.
+Tauri commands (frontend → Rust, all in `crates/voxd/src/bin/voxd.rs`):
 
-Requests: `GetState`, `GetConfig`, `SetConfig`, `GetDevices`, `StartMicMeter` / `StopMicMeter`,
-`BeginHotkeyCapture` / `CancelHotkeyCapture`, `ListModels`, `DownloadModel`, `Benchmark`, `Quit`.
+`get_status` · `get_config` · `set_config` · `list_devices` · `list_models` · `get_paths` ·
+`capture_hotkey` / `cancel_hotkey_capture` · `start_meter` / `stop_meter` · `open_path` ·
+`quit_app`
 
-Events: `State`, `DevicesChanged`, `MicLevel`, `HotkeyCaptured`, `DownloadProgress`,
-`TranscriptDone { text, timings }`, `Notice`.
+Events (Rust → frontend): `status` (the whole [`Status`] struct on every state change),
+`level` (mic meter, ~10 Hz, only while the meter runs), `devices_changed` (debounced
+`IMMNotificationClient` notification).
+
+`Status` is the single payload the UI renders: state, hotkey, mode, model, `engine_loaded`,
+device, last transcript, release→text latency, last error, dictation count. The same struct
+drives the tray tooltip and icon (blue idle / red dot while recording).
+
+**Hotkey binding** runs through the hook layer's bind mode: `capture_hotkey` puts the hooks
+into a state where the next non-modifier press is reported as a `Chord` and swallowed, rather
+than matched. Escape cancels; left/right mouse buttons are ignored so the desktop stays usable.
 
 ---
 
@@ -350,8 +376,9 @@ Events: `State`, `DevicesChanged`, `MicLevel`, `HotkeyCaptured`, `DownloadProgre
    with Quit, config file, `devices` / `mic-test` / `transcribe` subcommands. Console
    subsystem kept for logs until phase 3. Measured: AirPods Max take ~800 ms to open
    (Bluetooth HFP switch) — the "ready" tick exists for exactly this.
-2. IPC + settings UI: device picker with live meter, hotkey binder, model picker, autostart,
-   device-change notifications.
+2. ✅ **Settings UI** (2026-09-05): Tauri app with tray icon, device picker + live level meter,
+   press-a-key hotkey binder, mode/model/backend pickers, autostart, injection strategy,
+   activity panel; live device-change notifications.
 3. Incremental segmentation, injection strategies, keep-warm policy, installer
    (core + optional CUDA pack; models downloaded on first run with SHA-256 check).
 4. Optional: Parakeet engine, local-LLM cleanup pass, per-app rules, floating recording indicator.
@@ -374,12 +401,18 @@ Events: `State`, `DevicesChanged`, `MicLevel`, `HotkeyCaptured`, `DownloadProgre
 | 2026-09-05 | Threads = physical cores (`num_cpus`), max 16 | 12 > 8 on the 3900X |
 | 2026-09-05 | `large-v3-turbo` is GPU-only; `base.en` is the CPU default | 4–6 s/pass on CPU vs ~0.2 s tail for `base.en` |
 | 2026-09-05 | CPU baseline is AVX2 | pre-2013/2015 CPUs deferred until ggml runtime dispatch (`GGML_CPU_ALL_VARIANTS`) is wired in |
+| 2026-09-05 | **Reversed**: one Tauri process instead of daemon + UI over a named pipe | the webview exists only while the window is open, giving the same idle cost without a second binary or an IPC protocol; also removes `vox-ipc` |
+| 2026-09-05 | **Reversed**: Tauri/WebView2 instead of egui | egui cannot produce the intended look; WebView2 ships with Windows 11 so the runtime is already there (+~4 MB binary) |
+| 2026-09-05 | Frontend is plain DOM, no npm/bundler | one `app.js` + one `styles.css`, no `node_modules`, no build step in `cargo build`; structured like a React app so it stays readable |
+| 2026-09-05 | Autostart entry passes `--minimized` | launching by hand should show the window; launching at login should not |
+| 2026-09-05 | Hotkey binding reuses the hooks in a "capture" mode | binds anything the matcher can match, including mouse side buttons, with no second input path |
 
 ## 15. Toolchain (dev machine status, 2026-09-05)
 
 | Tool | Needed for | Status |
 |---|---|---|
 | Rust 1.98 (rustup, stable, `x86_64-pc-windows-msvc`) | everything | present |
+| WebView2 runtime | the settings window | present (ships with Windows 11) |
 | MSVC Build Tools 2019 (C++ x64) | linking, whisper.cpp | present — VS 2022 Community is also installed but lacks x64 libs; `scripts\cargo-msvc.cmd` selects 2019 |
 | CMake 4.4 | whisper.cpp build via `whisper-rs-sys` | present |
 | LLVM 22 (libclang) | bindgen in `whisper-rs-sys` | present |
@@ -389,3 +422,22 @@ Events: `State`, `DevicesChanged`, `MicLevel`, `HotkeyCaptured`, `DownloadProgre
 
 Always build with `scripts\cargo-msvc.cmd <cargo args>`; see the comments in
 `.cargo/config.toml` for why.
+
+## 16. The frontend
+
+`crates/voxd/ui/` — three files, no dependencies, no build step. Tauri serves the directory
+as the window's content; editing a file and reopening the window is the whole dev loop.
+
+* `index.html` — a root div and two script/style tags.
+* `styles.css` — CSS custom properties for the palette (blue 500/600/700 on a cool grey
+  ground), then components: cards, buttons, segmented controls, switches, radio rows, the
+  level meter, the bind-key overlay, toasts.
+* `app.js` — an `h(tag, props, ...children)` helper, a `store`, component functions
+  (`HotkeyCard`, `MicCard`, `EngineCard`, `BehaviorCard`, `ActivityCard`), and `render()`
+  which rebuilds from state. Config edits are debounced 250 ms before `set_config`, so a
+  slider drag is one write. `status` events patch only the topbar and activity panel to avoid
+  stealing focus from inputs.
+
+For design work without the daemon, copy the stub bridge into `ui/preview.local.html`
+(git-ignored, see `.claude/launch.json`) and serve the folder:
+`python -m http.server 5177 --directory crates/voxd/ui`.

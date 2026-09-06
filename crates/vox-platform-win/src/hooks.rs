@@ -8,10 +8,15 @@
 //!
 //! Only the bound chord's main key is ever swallowed. The mouse hook is installed only when
 //! the chord uses a mouse button, since it otherwise costs a call per mouse move.
+//!
+//! **Bind mode** ([`begin_capture`]): the next non-modifier key or mouse button press,
+//! together with the modifiers held at that moment, is reported as a [`Chord`] instead of
+//! being matched. Escape cancels. Used by the settings UI's "press a key" control.
 
 use std::sync::{Mutex, OnceLock};
 
 use crossbeam_channel::Sender;
+use vox_core::chord::vk;
 use vox_core::{Chord, ChordMatcher, HotkeyEvent, InputEvent, Key, MouseButton};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -26,6 +31,8 @@ use crate::PlatformError;
 struct Shared {
     matcher: Mutex<ChordMatcher>,
     tx: Sender<HotkeyEvent>,
+    /// While `Some`, the next press is reported here (`None` = cancelled with Escape).
+    capture: Mutex<Option<Sender<Option<Chord>>>>,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
@@ -36,6 +43,7 @@ pub fn init(chord: Chord, tx: Sender<HotkeyEvent>) -> Result<(), PlatformError> 
         .set(Shared {
             matcher: Mutex::new(ChordMatcher::new(chord)),
             tx,
+            capture: Mutex::new(None),
         })
         .map_err(|_| PlatformError::Other("hooks already initialised".into()))
 }
@@ -57,6 +65,24 @@ pub fn reset_held() {
     }
 }
 
+/// Enter bind mode: the next non-modifier press is sent on `tx` and swallowed. Left/right
+/// mouse buttons are ignored (binding them would make the desktop unusable).
+pub fn begin_capture(tx: Sender<Option<Chord>>) {
+    if let Some(s) = SHARED.get() {
+        if let Ok(mut c) = s.capture.lock() {
+            *c = Some(tx);
+        }
+    }
+}
+
+pub fn cancel_capture() {
+    if let Some(s) = SHARED.get() {
+        if let Ok(mut c) = s.capture.lock() {
+            *c = None;
+        }
+    }
+}
+
 pub fn chord_uses_mouse(chord: &Chord) -> bool {
     matches!(chord.key, Key::Mouse(_))
 }
@@ -66,10 +92,35 @@ fn dispatch(key: Key, pressed: bool) -> bool {
     let Some(s) = SHARED.get() else {
         return false;
     };
-    let result = match s.matcher.lock() {
-        Ok(mut m) => m.feed(InputEvent { key, pressed }),
-        Err(_) => return false,
+    let Ok(mut matcher) = s.matcher.lock() else {
+        return false;
     };
+
+    if let Ok(mut capture) = s.capture.lock() {
+        if let Some(tx) = capture.as_ref() {
+            // Keep the held-key bookkeeping current, but never emit hotkey events while binding.
+            let _ = matcher.feed(InputEvent { key, pressed });
+            if !pressed {
+                return false;
+            }
+            if key == Key::Keyboard(vk::ESCAPE) {
+                let _ = tx.try_send(None);
+                *capture = None;
+                return true;
+            }
+            if key.as_modifier().is_some()
+                || matches!(key, Key::Mouse(MouseButton::Left | MouseButton::Right))
+            {
+                return false;
+            }
+            let chord = Chord::with_modifiers(key, matcher.held_modifiers(key));
+            let _ = tx.try_send(Some(chord));
+            *capture = None;
+            return true;
+        }
+    }
+
+    let result = matcher.feed(InputEvent { key, pressed });
     if let Some(ev) = result.event {
         let _ = s.tx.try_send(ev);
     }

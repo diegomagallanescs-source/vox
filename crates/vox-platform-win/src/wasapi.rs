@@ -40,7 +40,7 @@ use crate::PlatformError;
 
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeviceInfo {
     /// WASAPI endpoint ID — stable across reboots; what `DeviceSelection::Specific` stores.
     pub id: String,
@@ -59,12 +59,12 @@ pub enum AudioMsg {
 }
 
 /// Per-thread COM scope. `CoInitializeEx` is reference counted, so nesting is harmless.
-struct ComScope {
+pub(crate) struct ComScope {
     owns: bool,
 }
 
 impl ComScope {
-    fn enter() -> ComScope {
+    pub(crate) fn enter() -> ComScope {
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         ComScope { owns: hr == S_OK }
     }
@@ -78,7 +78,7 @@ impl Drop for ComScope {
     }
 }
 
-fn enumerator() -> Result<IMMDeviceEnumerator, PlatformError> {
+pub(crate) fn enumerator() -> Result<IMMDeviceEnumerator, PlatformError> {
     unsafe { CoCreateInstance(&MMDeviceEnumerator, None::<&IUnknown>, CLSCTX_ALL) }
         .map_err(PlatformError::win("CoCreateInstance(MMDeviceEnumerator)"))
 }

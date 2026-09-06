@@ -430,7 +430,7 @@ impl ChordMatcher {
 
     /// Modifiers currently held, ignoring `except` (so a chord whose main key *is* a modifier
     /// does not count itself).
-    fn held_modifiers(&self, except: Key) -> Modifiers {
+    pub fn held_modifiers(&self, except: Key) -> Modifiers {
         let mut m = Modifiers::NONE;
         for k in &self.held {
             if *k == except {

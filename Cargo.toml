@@ -46,7 +46,13 @@ windows = { version = "0.62", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Console",
+    "Win32_System_Registry",
 ] }
+# Direct dependency (same version the `windows` crate pins) so the `#[implement]` macro's
+# `windows_core::` paths resolve. Must stay in lockstep with `windows`.
+windows-core = "0.62"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-build = "2"
 
 # Small, fast binaries for the daemon; debug builds stay default for iteration speed.
 [profile.release]

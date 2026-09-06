@@ -8,6 +8,8 @@ description = "Windows platform layer for Vox: low-level input hooks, WASAPI cap
 [dependencies]
 vox-core = { path = "../vox-core" }
 crossbeam-channel.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 windows.workspace = true
+windows-core.workspace = true

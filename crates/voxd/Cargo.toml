@@ -3,8 +3,9 @@ name = "voxd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Vox daemon (voxd.exe) and diagnostics CLI (vox.exe): always-on push-to-talk dictation for Windows."
+description = "Vox app (voxd.exe: tray + settings window + dictation daemon) and diagnostics CLI (vox.exe)."
 publish = false
+build = "build.rs"
 
 [lib]
 name = "voxd"
@@ -27,6 +28,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 hound.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
 
 [features]
 cuda = ["vox-engine-whisper/cuda"]

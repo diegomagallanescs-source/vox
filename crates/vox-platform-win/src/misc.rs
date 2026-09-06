@@ -38,6 +38,11 @@ pub fn message_box(title: &str, text: &str, kind: MessageKind) {
 
 use crate::PlatformError;
 
+/// RMS of a sample buffer (re-exported for the UI's level meter).
+pub fn vad_rms(frame: &[f32]) -> f32 {
+    vox_core::vad::EnergyVad::rms(frame)
+}
+
 /// NUL-terminated UTF-16 for passing to `*W` APIs. Keep the `Vec` alive for the call.
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

@@ -42,32 +42,71 @@ pub fn transcribe_opts(cfg: &Config) -> TranscribeOptions {
     }
 }
 
+/// Messages to the inference thread.
+pub enum InferenceMsg {
+    Job(Job),
+    /// Config changed (model, threads, language…): drop the engine and load again.
+    Reload(Config),
+}
+
+/// Messages from the inference thread.
+pub enum InferenceEvent {
+    Result(JobResult),
+    /// Engine (re)loaded; payload is the model name.
+    Loaded(String),
+    /// Engine could not be loaded; dictation will produce nothing until fixed.
+    Failed(String),
+}
+
 /// Inference thread: one engine, jobs in order, results in order. Loads the model lazily
 /// if `preloaded` is `None`.
 pub fn spawn_inference(
-    cfg: Config,
+    mut cfg: Config,
     preloaded: Option<WhisperEngine>,
-    jobs_rx: Receiver<Job>,
-    results_tx: Sender<JobResult>,
+    rx: Receiver<InferenceMsg>,
+    tx: Sender<InferenceEvent>,
 ) {
     std::thread::Builder::new()
         .name("vox-inference".into())
         .spawn(move || {
-            let base_opts = transcribe_opts(&cfg);
             let mut engine = preloaded;
-            for job in jobs_rx {
+            if let Some(e) = &engine {
+                let _ = tx.send(InferenceEvent::Loaded(e.name().to_string()));
+            }
+            for msg in rx {
+                let job = match msg {
+                    InferenceMsg::Reload(new_cfg) => {
+                        cfg = new_cfg;
+                        engine = None;
+                        match load_engine(&cfg) {
+                            Ok(e) => {
+                                let _ = tx.send(InferenceEvent::Loaded(e.name().to_string()));
+                                engine = Some(e);
+                            }
+                            Err(e) => {
+                                let _ = tx.send(InferenceEvent::Failed(format!("{e:#}")));
+                            }
+                        }
+                        continue;
+                    }
+                    InferenceMsg::Job(job) => job,
+                };
+
                 if engine.is_none() {
                     match load_engine(&cfg) {
-                        Ok(e) => engine = Some(e),
+                        Ok(e) => {
+                            let _ = tx.send(InferenceEvent::Loaded(e.name().to_string()));
+                            engine = Some(e);
+                        }
                         Err(e) => {
-                            tracing::error!("cannot load model: {e:#}");
-                            let _ = results_tx.send(JobResult {
+                            let _ = tx.send(InferenceEvent::Failed(format!("{e:#}")));
+                            let _ = tx.send(InferenceEvent::Result(JobResult {
                                 generation: job.generation,
                                 text: String::new(),
                                 is_final: job.is_final,
                                 audio_ms: 0,
                                 elapsed: Duration::ZERO,
-                            });
+                            }));
                             continue;
                         }
                     }
@@ -75,7 +114,7 @@ pub fn spawn_inference(
                 let engine = engine.as_mut().expect("engine loaded above");
                 let opts = TranscribeOptions {
                     initial_prompt: job.prompt.clone(),
-                    ..base_opts.clone()
+                    ..transcribe_opts(&cfg)
                 };
                 let t0 = Instant::now();
                 let text = match engine.transcribe(&job.samples, &opts) {
@@ -85,13 +124,13 @@ pub fn spawn_inference(
                         String::new()
                     }
                 };
-                let _ = results_tx.send(JobResult {
+                let _ = tx.send(InferenceEvent::Result(JobResult {
                     generation: job.generation,
                     text,
                     is_final: job.is_final,
                     audio_ms: (job.samples.len() * 1000 / SAMPLE_RATE as usize) as u32,
                     elapsed: t0.elapsed(),
-                });
+                }));
             }
         })
         .expect("spawn inference thread");

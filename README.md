@@ -11,10 +11,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 ```
 crates/vox-core            pure logic + tests (no Win32)
 crates/vox-engine-whisper  whisper.cpp engine
-crates/vox-platform-win    WASAPI, hooks, SendInput, tray
-crates/vox-ipc             daemon <-> UI protocol
-crates/voxd                background daemon (bin)
-crates/vox-ui              settings window (bin)
+crates/vox-platform-win    WASAPI, input hooks, SendInput, autostart
+crates/vox-bench           latency/accuracy harness
+crates/voxd                voxd.exe (Tauri app + daemon threads), vox.exe (CLI)
+crates/voxd/ui             the settings frontend — plain HTML/CSS/JS, no build step
 ```
 
 ## Build
@@ -33,18 +33,22 @@ Prerequisites: Rust (stable, MSVC target), MSVC Build Tools (C++ x64), CMake, LL
 Models go in `models/` (git-ignored), e.g. `ggml-base.en-q5_1.bin` from
 `huggingface.co/ggerganov/whisper.cpp`.
 
-## Run the daemon (phase 1)
+## Run
 
 ```bash
 target\release\voxd.exe
 ```
 
-Double-clicking `voxd.exe` shows no window — only a tray icon (that's the point: it keeps
-listening with nothing open). Right-click the icon for the menu. First run writes
-`%APPDATA%\Vox\config.toml` (default hotkey `F13`, push-to-talk); edit `chord` to something
-you can press — `"Mouse4"`, `"RCtrl"`, `"Ctrl+Shift+Space"` — and restart. Hold the key,
-talk, release. Logs: `%LOCALAPPDATA%\Vox\logs\voxd.log` (also printed when run from a
-terminal); `RUST_LOG=debug` adds per-segment timings. Start-up failures show a message box.
+The settings window opens and a tray icon appears. Set the hotkey (click **Change…** and press
+the key or mouse side button you want), pick a microphone, then hold the key, talk, and
+release — the text lands in whatever had focus.
+
+Closing the window leaves Vox listening in the tray; click the tray icon to bring it back,
+right-click for Quit. Started at login it stays in the tray without opening the window.
+
+Config: `%APPDATA%\Vox\config.toml` · logs: `%LOCALAPPDATA%\Vox\logs\voxd.log` (also printed
+when run from a terminal; `RUST_LOG=debug` adds per-segment timings). Start-up failures show
+a message box.
 
 Diagnostics live in the console CLI `vox.exe` (a windowed exe can't print to a terminal in
 a way shells wait for):
