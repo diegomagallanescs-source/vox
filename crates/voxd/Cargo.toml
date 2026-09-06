@@ -3,12 +3,20 @@ name = "voxd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Vox daemon: always-on push-to-talk dictation for Windows."
+description = "Vox daemon (voxd.exe) and diagnostics CLI (vox.exe): always-on push-to-talk dictation for Windows."
 publish = false
+
+[lib]
+name = "voxd"
+path = "src/lib.rs"
 
 [[bin]]
 name = "voxd"
-path = "src/main.rs"
+path = "src/bin/voxd.rs"
+
+[[bin]]
+name = "vox"
+path = "src/bin/vox.rs"
 
 [dependencies]
 vox-core = { path = "../vox-core" }

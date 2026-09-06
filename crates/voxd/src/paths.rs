@@ -1,4 +1,4 @@
-//! Where the daemon keeps its config and looks for models.
+//! Where the daemon keeps its config, logs, and looks for models.
 
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,17 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
+/// `%LOCALAPPDATA%\Vox`
+pub fn local_dir() -> PathBuf {
+    env_dir("LOCALAPPDATA")
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Vox")
+}
+
+pub fn log_path() -> PathBuf {
+    local_dir().join("logs").join("voxd.log")
+}
+
 /// Loads the config, writing a default file on first run so the user has something to edit.
 pub fn load_or_create_config() -> anyhow::Result<Config> {
     let path = config_path();
@@ -39,20 +50,32 @@ pub fn load_or_create_config() -> anyhow::Result<Config> {
     Ok(cfg)
 }
 
-/// Directories searched for `ggml-<model>.bin`, in order.
+/// Directories searched for `ggml-<model>.bin`, in order: next to the exe and up to three
+/// levels above it (so a dev build in `target\release` finds the repo's `models\`), the
+/// current directory, then `%LOCALAPPDATA%\Vox\models`.
 pub fn model_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut push = |d: PathBuf| {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    };
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            dirs.push(dir.join("models"));
+        let mut dir = exe.parent();
+        for _ in 0..4 {
+            match dir {
+                Some(d) => {
+                    push(d.join("models"));
+                    dir = d.parent();
+                }
+                None => break,
+            }
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        dirs.push(cwd.join("models"));
+        push(cwd.join("models"));
     }
-    if let Some(local) = env_dir("LOCALAPPDATA") {
-        dirs.push(local.join("Vox").join("models"));
-    }
+    push(local_dir().join("models"));
     dirs
 }
 

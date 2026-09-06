@@ -39,15 +39,21 @@ Models go in `models/` (git-ignored), e.g. `ggml-base.en-q5_1.bin` from
 target\release\voxd.exe
 ```
 
-First run writes `%APPDATA%\Vox\config.toml` (default hotkey `F13`, push-to-talk). Edit
-`chord` to something you can press — `"Mouse4"`, `"RCtrl"`, `"Ctrl+Shift+Space"` — and
-restart. A tray icon appears; hold the key, talk, release. `RUST_LOG=debug` prints per-segment
-timings.
+Double-clicking `voxd.exe` shows no window — only a tray icon (that's the point: it keeps
+listening with nothing open). Right-click the icon for the menu. First run writes
+`%APPDATA%\Vox\config.toml` (default hotkey `F13`, push-to-talk); edit `chord` to something
+you can press — `"Mouse4"`, `"RCtrl"`, `"Ctrl+Shift+Space"` — and restart. Hold the key,
+talk, release. Logs: `%LOCALAPPDATA%\Vox\logs\voxd.log` (also printed when run from a
+terminal); `RUST_LOG=debug` adds per-segment timings. Start-up failures show a message box.
+
+Diagnostics live in the console CLI `vox.exe` (a windowed exe can't print to a terminal in
+a way shells wait for):
 
 ```bash
-target\release\voxd.exe devices        # capture devices + which are the Windows defaults
-target\release\voxd.exe mic-test 4     # record 4 s from the configured mic and transcribe
-target\release\voxd.exe transcribe assets/bench/tts-en.wav
+target\release\vox.exe info            # config / log / model locations, configured hotkey
+target\release\vox.exe devices         # capture devices + which are the Windows defaults
+target\release\vox.exe mic-test 4      # record 4 s from the configured mic and transcribe
+target\release\vox.exe transcribe assets/bench/tts-en.wav
 ```
 
 ## Benchmark

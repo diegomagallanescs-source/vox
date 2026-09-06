@@ -97,7 +97,7 @@ impl Coordinator {
     pub fn run(mut self) {
         self.refresh_tooltip();
         tracing::info!(
-            "ready — hold {} to dictate ({:?} mode)",
+            "ready - hold {} to dictate ({:?} mode)",
             self.cfg.hotkey.chord,
             self.cfg.hotkey.mode
         );

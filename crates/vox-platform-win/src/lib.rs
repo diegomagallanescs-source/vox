@@ -17,7 +17,7 @@ pub mod wasapi;
 
 pub use inject::WinTextSink;
 pub use message_thread::{MessageThreadHandle, TrayEvent};
-pub use misc::{tick, SingleInstance, Tick};
+pub use misc::{attach_parent_console, message_box, tick, MessageKind, SingleInstance, Tick};
 pub use wasapi::{list_capture_devices, open_capture, AudioMsg, CaptureStream, DeviceInfo};
 
 #[derive(Debug, thiserror::Error)]

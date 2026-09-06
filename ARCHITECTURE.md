@@ -261,7 +261,8 @@ crates/
                       autostart (HKCU\Run), single-instance mutex, sounds
   vox-ipc/            versioned protocol (serde, length-prefixed JSON) + named-pipe client/server
   vox-testkit/        fakes: WavAudioSource, ScriptedHotkeys, RecordingTextSink, FakeEngine
-  voxd/        (bin)  daemon — wires everything; also `voxd --transcribe file.wav` e2e/bench harness
+  voxd/               lib + two bins: `voxd.exe` (windowed daemon, tray only) and `vox.exe`
+                      (console CLI: info / devices / mic-test / transcribe)
   vox-ui/      (bin)  egui settings; depends only on vox-ipc + vox-core types
 ```
 

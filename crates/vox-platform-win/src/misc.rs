@@ -2,8 +2,39 @@
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::Win32::System::Diagnostics::Debug::Beep;
 use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::UI::WindowsAndMessaging::{
+    MessageBoxW, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
+};
+
+/// For a `windows_subsystem = "windows"` binary: reattach to the parent terminal's console
+/// when launched from one, so `println!`/logs are visible there. Returns whether a console
+/// is now attached. Harmless when double-clicked from Explorer (no parent console).
+pub fn attach_parent_console() -> bool {
+    unsafe { AttachConsole(ATTACH_PARENT_PROCESS).is_ok() }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    Info,
+    Error,
+}
+
+/// Modal message box — the only UI a headless daemon has for fatal errors.
+pub fn message_box(title: &str, text: &str, kind: MessageKind) {
+    let title = wide(title);
+    let text = wide(text);
+    let style: MESSAGEBOX_STYLE = MB_OK
+        | match kind {
+            MessageKind::Info => MB_ICONINFORMATION,
+            MessageKind::Error => MB_ICONERROR,
+        };
+    unsafe {
+        MessageBoxW(None, pcwstr(&text), pcwstr(&title), style);
+    }
+}
 
 use crate::PlatformError;
 

@@ -45,6 +45,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Ole",
     "Win32_System_LibraryLoader",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Console",
 ] }
 
 # Small, fast binaries for the daemon; debug builds stay default for iteration speed.
