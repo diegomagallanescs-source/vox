@@ -17,11 +17,39 @@ crates/voxd                voxd.exe (Tauri app + daemon threads), vox.exe (CLI)
 crates/voxd/ui             the settings frontend — plain HTML/CSS/JS, no build step
 ```
 
+## Getting a copy to someone else
+
+Building from source needs ~2 GB of toolchain, so for anyone who just wants to *use*
+Vox, hand them a portable folder instead — no Rust, no compilers, nothing to install:
+
+```bash
+scripts\package.ps1
+```
+
+That produces `dist\Vox-portable.zip` (~58 MB): `voxd.exe`, `vox.exe`, a `models\`
+folder with `base.en`, and a plain-English README. They unzip it anywhere and run
+`voxd.exe`. Windows shows a SmartScreen warning because the binary isn't code-signed —
+"More info" → "Run anyway".
+
+Requirements on their side: 64-bit Windows 10/11, a CPU with AVX2 (roughly 2013 or
+newer), and WebView2 (preinstalled on Windows 11; Windows 10 may prompt for it).
+
 ## Build
+
+Prerequisites: Rust (stable, MSVC target), MSVC Build Tools with the **C++ x64** workload,
+CMake, and LLVM (for `libclang.dll`, used by whisper-rs's bindgen). Then:
 
 ```bash
 scripts\cargo-msvc.cmd build --release
 ```
+
+Models are not in the repo. Fetch at least one into `models\`:
+
+```bash
+curl -L -o models/ggml-base.en-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin
+```
+
+`vox.exe info` prints every directory searched and which model resolved.
 
 The wrapper picks a Visual Studio install that has the C++ x64 tools and points bindgen at
 LLVM; `.cargo/config.toml` carries the CMake flags that make whisper.cpp fast on MSVC. Plain
